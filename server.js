@@ -21,7 +21,11 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "*")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
-const APP_ATTEST_MODE = process.env.APP_ATTEST_MODE || "monitor";
+// Default to "enforce": in "monitor" mode requests that fail App Attest are
+// still served, so anyone who finds the server URL can call the AI routes with
+// no authentication and burn OpenAI budget. Override explicitly with
+// APP_ATTEST_MODE=monitor|off when a permissive mode is really needed.
+const APP_ATTEST_MODE = process.env.APP_ATTEST_MODE || "enforce";
 const APP_ATTEST_TEAM_ID = process.env.APP_ATTEST_TEAM_ID || "S6L62N62M4";
 const APP_ATTEST_BUNDLE_ID = process.env.APP_ATTEST_BUNDLE_ID || "com.smokeys30.studybuddy";
 const APP_ATTEST_ALLOW_DEVELOPMENT = parseBoolean(
@@ -34,6 +38,61 @@ const PROTECTED_API_PATHS = new Set([
   "/api/learning/attempt",
   "/api/study-path"
 ]);
+
+// --- Per-IP rate limiting for the protected API routes ---
+// Bounds how much OpenAI spend a single caller can trigger, even if they
+// somehow pass (or bypass) App Attest. 30 requests/minute/IP caps worst-case
+// abuse at roughly $0.30/min per source instead of unbounded. Tune with
+// TUTOR_RATE_LIMIT_MAX / TUTOR_RATE_LIMIT_WINDOW_MS. Loopback callers (local
+// dev) are exempt.
+function positiveIntEnv(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+const RATE_LIMIT_MAX_REQUESTS = positiveIntEnv(process.env.TUTOR_RATE_LIMIT_MAX, 30);
+const RATE_LIMIT_WINDOW_MS = positiveIntEnv(process.env.TUTOR_RATE_LIMIT_WINDOW_MS, 60_000);
+const rateLimitBuckets = new Map();
+
+function clientIp(request) {
+  const forwarded = request.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    // Behind a single trusted proxy (e.g. Render) the proxy appends the real
+    // client IP, so the last entry is the one the caller cannot forge.
+    const parts = forwarded.split(",").map((part) => part.trim()).filter(Boolean);
+    if (parts.length) return parts[parts.length - 1];
+  }
+  return request.socket?.remoteAddress || "unknown";
+}
+
+function isLoopbackIp(ip) {
+  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+}
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  let bucket = rateLimitBuckets.get(ip);
+  if (!bucket) {
+    bucket = [];
+    rateLimitBuckets.set(ip, bucket);
+  }
+  while (bucket.length && now - bucket[0] > RATE_LIMIT_WINDOW_MS) bucket.shift();
+  if (bucket.length >= RATE_LIMIT_MAX_REQUESTS) {
+    const retryAfterMs = RATE_LIMIT_WINDOW_MS - (now - bucket[0]);
+    return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil(retryAfterMs / 1000)) };
+  }
+  bucket.push(now);
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+// Periodically drop fully-expired buckets so the map cannot grow without
+// bound on a long-lived server.
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, bucket] of rateLimitBuckets) {
+    while (bucket.length && now - bucket[0] > RATE_LIMIT_WINDOW_MS) bucket.shift();
+    if (!bucket.length) rateLimitBuckets.delete(ip);
+  }
+}, 5 * 60 * 1000);
 
 const EXAM_BLUEPRINTS = {
   "comptia-a-plus-core-1-220-1201": {
@@ -119,6 +178,23 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && PROTECTED_API_PATHS.has(requestPath)) {
+      // Reject abusive callers before doing any expensive work (body parsing,
+      // attestation verification, OpenAI calls). Runs before the App Attest
+      // check on purpose: it also throttles callers whose attestation fails
+      // but would be served anyway in monitor/off modes.
+      const callerIp = clientIp(request);
+      if (!isLoopbackIp(callerIp)) {
+        const limit = checkRateLimit(callerIp);
+        if (!limit.allowed) {
+          response.setHeader("Retry-After", String(limit.retryAfterSeconds));
+          sendJson(response, 429, {
+            error: "Rate limit exceeded. Please slow down and try again.",
+            retryAfterSeconds: limit.retryAfterSeconds
+          });
+          return;
+        }
+      }
+
       const rawBody = await readBody(request);
       const verification = await appAttest.verifyProtectedRequest({
         method: request.method,
