@@ -97,12 +97,15 @@ export class SecurityCenter {
 
   authenticateDashboard(authorizationHeader) {
     if (!this.dashboardConfigured || typeof authorizationHeader !== "string") return false;
-    const match = authorizationHeader.match(/^Basic\s+(.+)$/i);
-    if (!match) return false;
+    if (authorizationHeader.length > 4096) return false;
+    const separatorIndex = authorizationHeader.indexOf(" ");
+    if (separatorIndex !== 5 || authorizationHeader.slice(0, separatorIndex).toLowerCase() !== "basic") return false;
+    const encodedCredentials = authorizationHeader.slice(separatorIndex + 1);
+    if (!encodedCredentials || encodedCredentials.trim() !== encodedCredentials) return false;
 
     let decoded;
     try {
-      decoded = Buffer.from(match[1], "base64").toString("utf8");
+      decoded = Buffer.from(encodedCredentials, "base64").toString("utf8");
     } catch {
       return false;
     }

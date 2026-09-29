@@ -114,6 +114,7 @@ test("requires the configured dashboard credentials", async () => {
   assert.equal(center.authenticateDashboard(valid), true);
   assert.equal(center.authenticateDashboard(invalid), false);
   assert.equal(center.authenticateDashboard(undefined), false);
+  assert.equal(center.authenticateDashboard(`Basic ${" ".repeat(10_000)}`), false);
 });
 
 test("creates and verifies short-lived dashboard CSRF tokens", async () => {
