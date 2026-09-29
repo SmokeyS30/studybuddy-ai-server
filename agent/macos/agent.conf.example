@@ -1,0 +1,8 @@
+# Copy this file to:
+# /Library/Application Support/DaybreakSentinel/agent.conf
+# Then restrict it to root:wheel with mode 600.
+
+SENTINEL_SERVER_URL=https://studybuddy-ai-server-m5zi.onrender.com
+SENTINEL_AGENT_ID=personal-mac
+SENTINEL_INGEST_SECRET=replace-with-the-same-random-secret-used-on-render
+SENTINEL_REPORT_INTERVAL_SECONDS=3600

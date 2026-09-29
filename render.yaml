@@ -2,7 +2,7 @@ services:
   - type: web
     name: studybuddy-ai-server
     runtime: node
-    buildCommand: npm install
+    buildCommand: npm ci --omit=dev --ignore-scripts
     startCommand: npm start
     healthCheckPath: /health
     autoDeployTrigger: commit
@@ -32,3 +32,19 @@ services:
         value: "false"
       - key: OPENAI_API_KEY
         sync: false
+      - key: SECURITY_DATA_DIR
+        value: /var/data/studybuddy/security
+      - key: SECURITY_INGEST_SECRET
+        sync: false
+      - key: SECURITY_DASHBOARD_USERNAME
+        value: sentinel
+      - key: SECURITY_DASHBOARD_PASSWORD
+        sync: false
+      - key: SECURITY_CLOCK_SKEW_SECONDS
+        value: "300"
+      - key: SECURITY_MAX_EVENTS
+        value: "500"
+      - key: SECURITY_AI_ENABLED
+        value: "true"
+      - key: SECURITY_AI_MODEL
+        value: gpt-5.6-terra

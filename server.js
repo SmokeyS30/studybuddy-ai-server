@@ -5,9 +5,11 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { APP_ATTEST_HEADERS, AppAttestError, AppAttestManager } from "./appAttest.js";
+import { SecurityAIAnalyzer, SecurityAIError } from "./securityAI.js";
+import { SecurityCenter, SecurityCenterError } from "./securityCenter.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SERVER_VERSION = "1.2.0";
+const SERVER_VERSION = "1.4.0";
 const SERVER_STARTED_AT = new Date().toISOString();
 
 loadDotEnv(path.join(__dirname, ".env"));
@@ -16,6 +18,7 @@ const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || (process.env.PORT ? "0.0.0.0" : "127.0.0.1");
 const DATA_DIR = path.resolve(__dirname, process.env.STUDYBUDDY_DATA_DIR || "./data");
 const PROFILE_FILE = path.join(DATA_DIR, "profiles.json");
+const SECURITY_DATA_DIR = path.resolve(process.env.SECURITY_DATA_DIR || path.join(DATA_DIR, "security"));
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-terra";
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "*")
   .split(",")
@@ -135,14 +138,111 @@ const appAttest = new AppAttestManager({
 });
 await appAttest.initialize();
 
+const securityCenter = new SecurityCenter({
+  dataDir: SECURITY_DATA_DIR,
+  ingestSecret: process.env.SECURITY_INGEST_SECRET,
+  dashboardUsername: process.env.SECURITY_DASHBOARD_USERNAME,
+  dashboardPassword: process.env.SECURITY_DASHBOARD_PASSWORD,
+  clockSkewSeconds: process.env.SECURITY_CLOCK_SKEW_SECONDS,
+  maxEvents: process.env.SECURITY_MAX_EVENTS
+});
+await securityCenter.initialize();
+
+const securityAI = new SecurityAIAnalyzer({
+  enabled: parseBoolean(process.env.SECURITY_AI_ENABLED, false),
+  apiKey: process.env.OPENAI_API_KEY,
+  model: process.env.SECURITY_AI_MODEL || OPENAI_MODEL
+});
+
 const server = http.createServer(async (request, response) => {
   try {
-    setCorsHeaders(request, response);
     const requestPath = new URL(request.url || "/", "http://studybuddy.local").pathname;
+    const isSecurityRoute = requestPath === "/security" || requestPath.startsWith("/api/security/");
+    if (!isSecurityRoute) setCorsHeaders(request, response);
 
     if (request.method === "OPTIONS") {
       response.writeHead(204);
       response.end();
+      return;
+    }
+
+    if (request.method === "POST" && requestPath === "/api/security/v1/events") {
+      const rawBody = await readBody(request, 64 * 1024);
+      const result = await securityCenter.ingest({
+        headers: request.headers,
+        rawBody,
+        method: request.method,
+        requestPath
+      });
+      setSecurityResponseHeaders(response);
+      sendJson(response, 202, result);
+      return;
+    }
+
+    if (request.method === "POST" && requestPath === "/api/security/v1/commands/poll") {
+      const rawBody = await readBody(request, 8 * 1024);
+      const result = await securityCenter.pollCommands({
+        headers: request.headers,
+        rawBody,
+        method: request.method,
+        requestPath
+      });
+      setSecurityResponseHeaders(response);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === "POST" && requestPath === "/api/security/v1/actions") {
+      if (!securityCenter.dashboardConfigured) {
+        setSecurityResponseHeaders(response);
+        sendJson(response, 503, { error: "Security dashboard is not configured." });
+        return;
+      }
+      if (!securityCenter.authenticateDashboard(request.headers.authorization)) {
+        sendDashboardUnauthorized(response);
+        return;
+      }
+      if (!String(request.headers["content-type"] || "").toLowerCase().startsWith("application/x-www-form-urlencoded")) {
+        throw new SecurityCenterError("security_action_content_type_invalid", "The dashboard action content type is invalid.", 415);
+      }
+      const form = new URLSearchParams((await readBody(request, 8 * 1024)).toString("utf8"));
+      if (!securityCenter.verifyCsrfToken(form.get("csrf"))) {
+        throw new SecurityCenterError("security_action_csrf_invalid", "The dashboard action could not be verified.", 403);
+      }
+      const action = form.get("action");
+      if (action === "scan_now") {
+        await securityCenter.queueScan(form.get("agentId"));
+      } else if (action === "acknowledge_event") {
+        await securityCenter.acknowledgeEvent(form.get("eventId"));
+      } else if (action === "analyze_event") {
+        const event = securityCenter.getEvent(form.get("eventId"));
+        if (!event) throw new SecurityCenterError("security_event_not_found", "The security event was not found.", 404);
+        const analysis = await securityAI.analyze(event);
+        await securityCenter.attachAiAnalysis(event.id, analysis);
+      } else {
+        throw new SecurityCenterError("security_action_invalid", "The dashboard action is not supported.");
+      }
+      setSecurityResponseHeaders(response);
+      sendRedirect(response, "/security");
+      return;
+    }
+
+    if (request.method === "GET" && (requestPath === "/security" || requestPath === "/api/security/v1/status")) {
+      if (!securityCenter.dashboardConfigured) {
+        setSecurityResponseHeaders(response);
+        sendJson(response, 503, { error: "Security dashboard is not configured." });
+        return;
+      }
+      if (!securityCenter.authenticateDashboard(request.headers.authorization)) {
+        sendDashboardUnauthorized(response);
+        return;
+      }
+      setSecurityResponseHeaders(response);
+      if (requestPath === "/security") {
+        sendHtml(response, 200, securityCenter.renderDashboard());
+      } else {
+        sendJson(response, 200, securityCenter.snapshot());
+      }
       return;
     }
 
@@ -249,6 +349,24 @@ const server = http.createServer(async (request, response) => {
 
     sendJson(response, 404, { error: "Route not found" });
   } catch (error) {
+    if (error instanceof SecurityAIError) {
+      setSecurityResponseHeaders(response);
+      sendJson(response, error.statusCode, {
+        error: "AI-assisted security review unavailable",
+        code: error.code
+      });
+      return;
+    }
+
+    if (error instanceof SecurityCenterError) {
+      setSecurityResponseHeaders(response);
+      sendJson(response, error.statusCode, {
+        error: "Security event rejected",
+        code: error.code
+      });
+      return;
+    }
+
     if (error instanceof AppAttestError) {
       sendJson(response, error.statusCode, {
         error: "App Attest verification failed",
@@ -737,12 +855,12 @@ function summarizeProfile(profile, examID) {
   };
 }
 
-async function readBody(request) {
+async function readBody(request, maximumBytes = 1_048_576) {
   const chunks = [];
   let totalBytes = 0;
   for await (const chunk of request) {
     totalBytes += chunk.length;
-    if (totalBytes > 1_048_576) {
+    if (totalBytes > maximumBytes) {
       throw new AppAttestError("request_too_large", "The request body is too large.", 413);
     }
     chunks.push(chunk);
@@ -764,6 +882,30 @@ function parseJson(rawBody) {
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, { "Content-Type": "application/json" });
   response.end(JSON.stringify(payload));
+}
+
+function sendHtml(response, statusCode, html) {
+  response.writeHead(statusCode, { "Content-Type": "text/html; charset=utf-8" });
+  response.end(html);
+}
+
+function sendRedirect(response, location) {
+  response.writeHead(303, { Location: location });
+  response.end();
+}
+
+function setSecurityResponseHeaders(response) {
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "DENY");
+}
+
+function sendDashboardUnauthorized(response) {
+  setSecurityResponseHeaders(response);
+  response.setHeader("WWW-Authenticate", 'Basic realm="Daybreak Sentinel", charset="UTF-8"');
+  sendJson(response, 401, { error: "Authentication required." });
 }
 
 function setCorsHeaders(request, response) {
