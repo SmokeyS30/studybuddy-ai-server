@@ -97,7 +97,6 @@ const server = http.createServer(async (request, response) => {
         port: PORT,
         model: OPENAI_MODEL,
         openaiConfigured: isOpenAIConfigured(),
-        openaiKeyStatus: openAIKeyStatus(),
         appAttest: appAttest.status(),
         storage: {
           persistentPathConfigured: DATA_DIR === "/var/data" || DATA_DIR.startsWith("/var/data/")
@@ -182,9 +181,12 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    console.error(
+      "[StudyBuddy AI server] Unhandled request error:",
+      error instanceof Error ? error.stack || error.message : String(error)
+    );
     sendJson(response, 500, {
-      error: "StudyBuddy AI server error",
-      detail: error instanceof Error ? error.message : String(error)
+      error: "StudyBuddy AI server error"
     });
   }
 });
