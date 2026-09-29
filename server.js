@@ -42,6 +42,13 @@ const PROTECTED_API_PATHS = new Set([
   "/api/study-path"
 ]);
 
+// Daybreak Sentinel routes share the same per-IP limiter. Unlike the tutor
+// routes they include GETs (the dashboard), so they are matched by prefix.
+function isRateLimitedRoute(method, requestPath) {
+  if (method === "POST" && PROTECTED_API_PATHS.has(requestPath)) return true;
+  return requestPath === "/security" || requestPath.startsWith("/api/security/");
+}
+
 // --- Per-IP rate limiting for the protected API routes ---
 // Bounds how much OpenAI spend a single caller can trigger, even if they
 // somehow pass (or bypass) App Attest. 30 requests/minute/IP caps worst-case
@@ -166,6 +173,24 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (isRateLimitedRoute(request.method, requestPath)) {
+      // Reject abusive callers before doing any expensive work (body parsing,
+      // attestation verification, OpenAI calls, dashboard auth). Runs before
+      // the App Attest check and before the Sentinel handlers on purpose.
+      const callerIp = clientIp(request);
+      if (!isLoopbackIp(callerIp)) {
+        const limit = checkRateLimit(callerIp);
+        if (!limit.allowed) {
+          response.setHeader("Retry-After", String(limit.retryAfterSeconds));
+          sendJson(response, 429, {
+            error: "Rate limit exceeded. Please slow down and try again.",
+            retryAfterSeconds: limit.retryAfterSeconds
+          });
+          return;
+        }
+      }
+    }
+
     if (request.method === "POST" && requestPath === "/api/security/v1/events") {
       const rawBody = await readBody(request, 64 * 1024);
       const result = await securityCenter.ingest({
@@ -278,23 +303,7 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "POST" && PROTECTED_API_PATHS.has(requestPath)) {
-      // Reject abusive callers before doing any expensive work (body parsing,
-      // attestation verification, OpenAI calls). Runs before the App Attest
-      // check on purpose: it also throttles callers whose attestation fails
-      // but would be served anyway in monitor/off modes.
-      const callerIp = clientIp(request);
-      if (!isLoopbackIp(callerIp)) {
-        const limit = checkRateLimit(callerIp);
-        if (!limit.allowed) {
-          response.setHeader("Retry-After", String(limit.retryAfterSeconds));
-          sendJson(response, 429, {
-            error: "Rate limit exceeded. Please slow down and try again.",
-            retryAfterSeconds: limit.retryAfterSeconds
-          });
-          return;
-        }
-      }
-
+      // Rate limiting already ran above (see isRateLimitedRoute gate).
       const rawBody = await readBody(request);
       const verification = await appAttest.verifyProtectedRequest({
         method: request.method,
