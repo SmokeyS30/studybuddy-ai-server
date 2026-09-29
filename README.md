@@ -6,7 +6,7 @@ This is the server-side AI tutor and adaptive learning engine for StudyBuddy. Ke
 
 - App version: `3.1`
 - App build: `21`
-- Server package version: `1.2.0`
+- Server package version: `1.4.0`
 - Server model: `gpt-5.6-terra`
 - Hosted Render URL: `https://studybuddy-ai-server-m5zi.onrender.com`
 - Local health check: `openaiConfigured: true`
@@ -24,6 +24,13 @@ This is the server-side AI tutor and adaptive learning engine for StudyBuddy. Ke
 - Runs with local fallback coaching when no OpenAI key is configured.
 - Registers Apple App Attest keys and verifies signed assertions for protected AI routes.
 - Supports `off`, `monitor`, and `enforce` rollout modes so older builds can remain usable during migration.
+- Hosts the defensive **Daybreak Sentinel** dashboard, signed posture-report API, AI-assisted review, and allowlisted fresh-scan control when its separate security credentials are configured.
+
+## Daybreak Sentinel
+
+Daybreak Sentinel adds a password-protected, iPhone-friendly security dashboard at `/security`. A small macOS agent reports eleven allowlisted posture checks using signed, replay-protected requests. The dashboard can acknowledge findings, request a fresh scan, and generate an explicit AI-assisted summary of sanitized results. It cannot execute arbitrary commands and does not collect IP addresses, usernames, process names, paths, browser data, or file contents.
+
+The feature remains disabled until its separate Render credentials are configured. See [docs/DAYBREAK_SENTINEL.md](docs/DAYBREAK_SENTINEL.md) for architecture, setup, privacy boundaries, and secret-rotation steps. See [THREAT-MODEL.md](THREAT-MODEL.md) for the security assumptions and residual risks.
 
 ## Local Setup
 
@@ -165,6 +172,11 @@ Budget around `$0.01` to `$0.02` per AI tutor interaction because longer chats, 
 - `POST /api/tutor/chat`
 - `POST /api/learning/attempt`
 - `POST /api/study-path`
+- `POST /api/security/v1/events` (signed Sentinel agent reports)
+- `POST /api/security/v1/commands/poll` (signed outbound agent polling)
+- `POST /api/security/v1/actions` (authenticated dashboard actions with anti-CSRF protection)
+- `GET /api/security/v1/status` (dashboard authentication required)
+- `GET /security` (dashboard authentication required)
 
 ## Privacy Notes
 
