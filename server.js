@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { APP_ATTEST_HEADERS, AppAttestError, AppAttestManager } from "./appAttest.js";
 import { SecurityAIAnalyzer, SecurityAIError } from "./securityAI.js";
 import { SecurityCenter, SecurityCenterError } from "./securityCenter.js";
+import { GitHubSentinel } from "./githubSentinel.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_VERSION = "1.4.0";
@@ -160,6 +161,19 @@ const securityAI = new SecurityAIAnalyzer({
   apiKey: process.env.OPENAI_API_KEY,
   model: process.env.SECURITY_AI_MODEL || OPENAI_MODEL
 });
+
+// Daybreak Sentinel GitHub agent: watches every repository the token can see
+// (repos are re-discovered on each scan, so new repos are covered
+// automatically) and ingests posture findings as Sentinel events. Idle unless
+// GITHUB_SENTINEL_TOKEN is set; safe to leave enabled by default.
+const githubSentinel = new GitHubSentinel({
+  securityCenter,
+  ingestSecret: process.env.SECURITY_INGEST_SECRET,
+  token: process.env.GITHUB_SENTINEL_TOKEN,
+  enabled: parseBoolean(process.env.GITHUB_SENTINEL_ENABLED, true),
+  intervalMs: positiveIntEnv(process.env.GITHUB_SENTINEL_INTERVAL_MS, 3_600_000),
+});
+githubSentinel.start();
 
 const server = http.createServer(async (request, response) => {
   try {

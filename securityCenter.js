@@ -20,7 +20,15 @@ const ALLOWED_CHECKS = new Set([
   "remoteLogin",
   "sip",
   "stealthMode",
-  "vpn"
+  "vpn",
+  "githubDependabot",
+  "githubSecretScanning",
+  "githubCodeScanning",
+  "githubBranchProtection",
+  "githubDeployKeys",
+  "githubCollaborators",
+  "githubPushActivity",
+  "githubActions"
 ]);
 const ALLOWED_PLATFORMS = new Set(["macos", "linux", "windows", "ios", "unknown"]);
 
@@ -604,7 +612,15 @@ function labelFor(name) {
     remoteLogin: "Remote Login",
     sip: "System Integrity Protection",
     stealthMode: "Stealth mode",
-    vpn: "VPN"
+    vpn: "VPN",
+    githubDependabot: "Dependabot alerts",
+    githubSecretScanning: "Secret scanning",
+    githubCodeScanning: "Code scanning",
+    githubBranchProtection: "Branch protection",
+    githubDeployKeys: "Deploy keys",
+    githubCollaborators: "Collaborators",
+    githubPushActivity: "Push activity",
+    githubActions: "Actions failures"
   })[name] || name;
 }
 

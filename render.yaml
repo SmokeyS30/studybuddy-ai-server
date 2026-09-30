@@ -48,3 +48,9 @@ services:
         value: "true"
       - key: SECURITY_AI_MODEL
         value: gpt-5.6-terra
+      - key: GITHUB_SENTINEL_TOKEN
+        sync: false
+      - key: GITHUB_SENTINEL_INTERVAL_MS
+        value: "3600000"
+      - key: GITHUB_SENTINEL_ENABLED
+        value: "true"
