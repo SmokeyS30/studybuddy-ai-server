@@ -54,3 +54,9 @@ services:
         value: "3600000"
       - key: GITHUB_SENTINEL_ENABLED
         value: "true"
+      # Set this in the Render dashboard only after the final data import.
+      # When present, the legacy Render hostname becomes a stateless Azure bridge.
+      - key: BRIDGE_UPSTREAM_URL
+        sync: false
+      - key: BRIDGE_TIMEOUT_MS
+        value: "120000"
