@@ -4,9 +4,9 @@
   "description": "Server-side AI tutor and adaptive learning engine for StudyBuddy.",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
+    "start": "node entrypoint.mjs",
     "dev": "node server.js",
-    "check": "node --check server.js && node --check appAttest.js && node --check securityCenter.js && node --check securityAI.js && node --check agent/macos/daybreak-sentinel-agent.mjs",
+    "check": "node --check entrypoint.mjs && node --check bridge.mjs && node --check server.js && node --check appAttest.js && node --check securityCenter.js && node --check securityAI.js && node --check agent/macos/daybreak-sentinel-agent.mjs",
     "test": "node --test"
   },
   "engines": {
