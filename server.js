@@ -770,15 +770,25 @@ async function buildChatResponse(context = {}, messages = [], profile) {
   }
 }
 
+function azureOpenAIConfig() {
+  const endpoint = (process.env.AZURE_OPENAI_ENDPOINT || "").trim().replace(/\/openai\/v1\/?$/, "").replace(/\/$/, "");
+  const apiKey = (process.env.AZURE_OPENAI_API_KEY || "").trim();
+  const deployment = (process.env.AZURE_OPENAI_DEPLOYMENT || "").trim() || OPENAI_MODEL;
+  if (!endpoint || !apiKey) return null;
+  return { endpoint, apiKey, deployment };
+}
+
 async function callOpenAI(payload) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const azure = azureOpenAIConfig();
+  const url = azure ? `${azure.endpoint}/openai/v1/responses` : "https://api.openai.com/v1/responses";
+  const headers = azure
+    ? { "api-key": azure.apiKey, "Content-Type": "application/json" }
+    : { Authorization: `Bearer ${(process.env.OPENAI_API_KEY || "").trim()}`, "Content-Type": "application/json" };
+  const response = await fetch(url, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${(process.env.OPENAI_API_KEY || "").trim()}`,
-      "Content-Type": "application/json"
-    },
+    headers,
     body: JSON.stringify({
-      model: OPENAI_MODEL,
+      model: azure ? azure.deployment : OPENAI_MODEL,
       input: [
         {
           role: "system",
@@ -811,6 +821,7 @@ function isOpenAIConfigured() {
 }
 
 function openAIKeyStatus() {
+  if (azureOpenAIConfig()) return "configured";
   const key = (process.env.OPENAI_API_KEY || "").trim();
   if (!key) return "missing";
   if (!key.startsWith("sk-")) return "invalid-prefix";
