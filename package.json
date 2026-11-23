@@ -13,6 +13,6 @@
     "node": ">=18"
   },
   "dependencies": {
-    "node-app-attest": "^1.0.1"
+    "node-app-attest": "^2.2.0"
   }
 }
